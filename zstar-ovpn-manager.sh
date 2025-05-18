@@ -102,5 +102,3 @@ while true; do
     echo "" # Línea extra para espaciado
     read -rp "Presiona Enter para volver al menú..."
 done
-
-# Fin de zstar-ovpn-manager.sh
