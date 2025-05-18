@@ -1,0 +1,11 @@
+      
+# Auto detect text files and ensure they use LF line endings on checkout.
+* text=auto eol=lf
+
+# Explicitly declare shell scripts to use LF.
+*.sh text eol=lf
+
+# Declare specific file types as binary so Git doesn't try to convert them.
+# (Añade aquí si tienes archivos binarios en tu repo, aunque para estos scripts no es común)
+# *.png binary
+# *.jpg binary
