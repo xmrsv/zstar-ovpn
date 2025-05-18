@@ -15,6 +15,7 @@ COMMON_FUNCTIONS_PATH="${LIB_DIR}/common-functions.sh"
 if [ -f "$COMMON_FUNCTIONS_PATH" ]; then
     source "$COMMON_FUNCTIONS_PATH"
 else
+    # Usar echo aquí ya que las funciones de log aún no están cargadas
     echo "[FATAL] Archivo de funciones comunes no encontrado: $COMMON_FUNCTIONS_PATH" >&2
     echo "Asegúrate de que la estructura del proyecto ZStar OVPN sea correcta." >&2
     exit 1
@@ -26,6 +27,7 @@ check_root
 # --- Bucle del Menú Principal ---
 while true; do
     clear # Limpiar pantalla para el menú
+    # Usar las variables de color definidas en common-functions.sh
     echo -e "${C_CYAN} ZStar OVPN Manager v0.1${C_RESET}"
     echo "------------------------------------"
     echo -e "Usr: ${C_YELLOW}$(whoami)@$(hostname)${C_RESET}"
@@ -43,10 +45,7 @@ while true; do
     echo ""
     echo "------------------------------------"
 
-    local choice
-    # Usamos nuestra función ask_value para el prompt, sin valor por defecto,
-    # y con una validación simple para las opciones del menú.
-    # La regex permite números del 1 al 5, y las letras s o q (mayúsculas o minúsculas).
+    # CORRECCIÓN APLICADA AQUÍ: Se eliminó 'local' antes de 'choice'
     choice=$(ask_value "Choice" "" "^[1-5sSqQ]$" "Opción inválida.")
 
     case "$choice" in
@@ -98,7 +97,9 @@ while true; do
             ;;
     esac
 
-    # Pausa antes de volver a mostrar el menú
-    echo "" # Línea extra para espaciado
-    read -rp "Presiona Enter para volver al menú..."
+    # Pausa antes de volver a mostrar el menú, solo si no se salió
+    if [[ "$choice" != [Qq]* ]]; then # Comprobar si la elección NO FUE 'q' o 'Q'
+        echo "" # Línea extra para espaciado
+        read -rp "Presiona Enter para volver al menú..."
+    fi
 done
