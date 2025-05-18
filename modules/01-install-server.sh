@@ -204,7 +204,7 @@ EOF
 
 cd "$EASYRSA_DIR" || log_fatal "No se pudo cambiar al directorio $EASYRSA_DIR."
 log_info "Inicializando PKI..."
-run_cmd ./easyrsa init-pki || log_fatal "Falló init-pki." # CORREGIDO: sin --vars
+run_cmd ./easyrsa init-pki || log_fatal "Falló init-pki."
 log_info "Construyendo Autoridad Certificadora (CA)... (Esto puede tardar)"
 run_cmd ./easyrsa --vars=./vars build-ca nopass || log_fatal "Falló build-ca."
 log_info "Generando solicitud y clave para el servidor OpenVPN..."
@@ -213,7 +213,7 @@ log_info "Firmando solicitud del servidor..."
 run_cmd ./easyrsa --vars=./vars sign-req server server || log_fatal "Falló sign-req server."
 log_info "Generando parámetros Diffie-Hellman (DH)... (Esto tomará MUCHO tiempo para ${EASYRSA_KEY_SIZE}-bit)"
 run_cmd ./easyrsa --vars=./vars gen-dh || log_fatal "Falló gen-dh."
-run_cmd mkdir -p "$SERVER_CONFIG_DIR" # Asegurar que exista antes de generar ta.key
+run_cmd mkdir -p "$SERVER_CONFIG_DIR"
 log_info "Generando clave TLS-Crypt (ta.key)..."
 run_cmd openvpn --genkey --secret "${SERVER_CONFIG_DIR}/ta.key" || log_fatal "Falló la generación de ta.key."
 log_info "Generando Lista de Revocación de Certificados (CRL)..."
@@ -233,40 +233,64 @@ run_cmd chmod 600 "${SERVER_CONFIG_DIR}/ta.key"
 # --- 6. Creación de server.conf ---
 log_info "--- Creando Archivo de Configuración del Servidor (server.conf) ---"
 SERVER_CONF_PATH="${SERVER_CONFIG_DIR}/server.conf"
-PUSH_DNS_OPTIONS=""
+
+# Construir las opciones de DNS para push
+# Cada directiva push irá en su propia línea.
+DNS_PUSH_LINES=""
 if [ ${#DNS_SERVERS[@]} -gt 0 ]; then
     for dns_ip in "${DNS_SERVERS[@]}"; do
-        PUSH_DNS_OPTIONS+="push \"dhcp-option DNS $dns_ip\"\n"
+        # Asegurar que cada push esté en una nueva línea
+        DNS_PUSH_LINES+="push \"dhcp-option DNS $dns_ip\"\n"
     done
 fi
+
 cat << EOF > "$SERVER_CONF_PATH"
 # Configuración del Servidor OpenVPN generada por ZStar OVPN
+# Fecha: $(date)
+
 port $VPN_PORT
 proto $VPN_PROTO_SERVER_CONF
 dev tun
 topology subnet
+
 ca ${SERVER_CONFIG_DIR}/ca.crt
 cert ${SERVER_CONFIG_DIR}/server.crt
 key ${SERVER_CONFIG_DIR}/server.key
 dh ${SERVER_CONFIG_DIR}/dh.pem
 crl-verify ${SERVER_CONFIG_DIR}/crl.pem
 tls-crypt ${SERVER_CONFIG_DIR}/ta.key
+
 server $DEFAULT_VPN_NETWORK $DEFAULT_VPN_NETMASK
 ifconfig-pool-persist ${LOG_DIR}/ipp.txt 3600
+
+# --- Opciones de Red y Cliente ---
 push "redirect-gateway def1 bypass-dhcp"
-${PUSH_DNS_OPTIONS}push "block-outside-dns"
+${DNS_PUSH_LINES}push "block-outside-dns" # CORREGIDO: DNS_PUSH_LINES ya tiene \n si hay contenido
+
 keepalive 10 120
+
+# --- Seguridad ---
 cipher AES-256-GCM
 auth SHA256
+# data-ciphers AES-256-GCM:AES-128-GCM
+# data-ciphers-fallback AES-256-CBC
+
 tls-version-min 1.2
 remote-cert-tls client
+
+# --- Privilegios y Persistencia ---
 user nobody
 group nogroup
 persist-key
 persist-tun
+
+# --- Logging ---
 status ${LOG_DIR}/openvpn-status.log
 log-append ${LOG_DIR}/openvpn.log
 verb 3
+# mute 20
+
+# --- Opcionales (Comentados por defecto) ---
 # client-to-client
 # duplicate-cn
 # compress lz4-v2
@@ -315,24 +339,35 @@ echo "export MAIN_NETWORK_INTERFACE=\"$MAIN_NETWORK_INTERFACE\"" >> "$VPN_CONFIG
 
 if command -v ufw >/dev/null 2>&1; then
     log_info "Configurando UFW..."
-    if ! ufw status | grep -qw "22/tcp"; then run_cmd ufw allow ssh; fi
+    if ! ufw status | grep -qw "22/tcp"; then run_cmd ufw allow ssh; fi # Permitir SSH
     run_cmd ufw allow "${VPN_PORT}/${VPN_PROTO}"
     if grep -q "^\s*DEFAULT_FORWARD_POLICY\s*=\s*\"DROP\"" /etc/default/ufw; then
         run_cmd sed -i 's/^\s*DEFAULT_FORWARD_POLICY\s*=\s*"DROP"/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
     elif ! grep -q "^\s*DEFAULT_FORWARD_POLICY\s*=\s*\"ACCEPT\"" /etc/default/ufw; then
-        echo -e "\nDEFAULT_FORWARD_POLICY=\"ACCEPT\"" >> /etc/default/ufw
+        echo -e "\n# Added by ZStar OVPN\nDEFAULT_FORWARD_POLICY=\"ACCEPT\"" >> /etc/default/ufw
     fi
     UFW_BEFORE_RULES="/etc/ufw/before.rules"
-    NAT_RULE_COMMENT="# ZStar OVPN NAT rules for $DEFAULT_VPN_NETWORK (OpenVPN)"
-    NAT_RULE_CONTENT="*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s $DEFAULT_VPN_NETWORK/$DEFAULT_VPN_NETMASK -o $MAIN_NETWORK_INTERFACE -j MASQUERADE\nCOMMIT"
-    if grep -qF "$NAT_RULE_COMMENT" "$UFW_BEFORE_RULES"; then
-        log_warn "Reglas de NAT de ZStar OVPN ya podrían existir en $UFW_BEFORE_RULES. Verifica manualmente."
+    NAT_RULE_COMMENT_START="# START ZStar OVPN NAT rules for $DEFAULT_VPN_NETWORK"
+    NAT_RULE_COMMENT_END="# END ZStar OVPN NAT rules"
+    NAT_RULES="*nat\n:POSTROUTING ACCEPT [0:0]\n-A POSTROUTING -s $DEFAULT_VPN_NETWORK/$DEFAULT_VPN_NETMASK -o $MAIN_NETWORK_INTERFACE -j MASQUERADE\nCOMMIT"
+    # Eliminar bloque antiguo si existe
+    if grep -qF "$NAT_RULE_COMMENT_START" "$UFW_BEFORE_RULES"; then
+        log_info "Eliminando reglas de NAT antiguas de ZStar OVPN de $UFW_BEFORE_RULES..."
+        sed -i "/^${NAT_RULE_COMMENT_START}$/,/^${NAT_RULE_COMMENT_END}$/d" "$UFW_BEFORE_RULES"
+    fi
+    log_info "Añadiendo nuevas reglas de NAT de ZStar OVPN a $UFW_BEFORE_RULES..."
+    # Añadir al principio del archivo (o después de la primera línea si es un shebang o comentario)
+    # Esto es más seguro que añadir al final de *nat si no sabemos dónde está.
+    # Una forma más robusta sería buscar la línea '*nat' y añadir después, y 'COMMIT' antes del siguiente bloque o EOF.
+    # Por ahora, lo añadimos al principio, asumiendo que before.rules no es demasiado complejo.
+    # O mejor, buscar la línea que contiene '*nat' y añadir después de ella.
+    if grep -q "^\*nat" "$UFW_BEFORE_RULES"; then
+        # Insertar después de la línea *nat
+        sed -i "/^\*nat/a ${NAT_RULE_COMMENT_START}\n${NAT_RULES}\n${NAT_RULE_COMMENT_END}" "$UFW_BEFORE_RULES"
     else
-        TEMP_BEFORE_RULES=$(mktemp)
-        echo -e "$NAT_RULE_COMMENT\n$NAT_RULE_CONTENT\n$(cat $UFW_BEFORE_RULES)" > "$TEMP_BEFORE_RULES"
-        run_cmd cp "$TEMP_BEFORE_RULES" "$UFW_BEFORE_RULES"
-        rm "$TEMP_BEFORE_RULES"
-        log_info "Reglas de NAT añadidas a $UFW_BEFORE_RULES (revisar)."
+        # Si no hay bloque *nat, crearlo (esto es menos probable para un before.rules funcional)
+        echo -e "\n${NAT_RULE_COMMENT_START}\n${NAT_RULES}\n${NAT_RULE_COMMENT_END}" >> "$UFW_BEFORE_RULES"
+        log_warn "No se encontró bloque '*nat' en $UFW_BEFORE_RULES. Se añadieron reglas al final. Revisa el archivo."
     fi
     run_cmd ufw disable && run_cmd ufw enable
     log_info "UFW configurado. Estado: $(ufw status verbose | head -n 1 | cut -d' ' -f2-)"
