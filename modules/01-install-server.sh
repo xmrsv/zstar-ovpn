@@ -265,7 +265,7 @@ ifconfig-pool-persist ${LOG_DIR}/ipp.txt 3600
 
 # --- Opciones de Red y Cliente ---
 push "redirect-gateway def1 bypass-dhcp"
-${DNS_PUSH_LINES}push "block-outside-dns" # CORREGIDO: DNS_PUSH_LINES ya tiene \n si hay contenido
+$(printf "%b" "${DNS_PUSH_BLOCK}")push "block-outside-dns" # CORRECCIÓN: Usar printf para expandir \n correctamente
 
 keepalive 10 120
 
